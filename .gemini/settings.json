@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "arcadedb": {
+      "command": "npx.cmd",
+      "args": [
+        "mcp-remote",
+        "http://localhost:2480/api/v1/mcp",
+        "--header",
+        "Authorization: Basic cm9vdDpwbGF5d2l0aGRhdGE="
+      ]
+    }
+  }
+}

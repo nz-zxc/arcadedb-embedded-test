@@ -3,11 +3,15 @@ package com.zxc;
 import com.arcadedb.ContextConfiguration;
 import com.arcadedb.GlobalConfiguration;
 import com.arcadedb.database.Database;
+import com.arcadedb.database.Document;
+import com.arcadedb.engine.ComponentFile;
+import com.arcadedb.event.BeforeRecordUpdateListener;
 import com.arcadedb.graph.MutableVertex;
+import com.arcadedb.schema.PropertyType;
 import com.arcadedb.schema.Schema;
+import com.arcadedb.schema.Type;
 import com.arcadedb.schema.VertexType;
 import com.arcadedb.server.ArcadeDBServer;
-import com.arcadedb.engine.ComponentFile;
 
 import java.util.Scanner;
 
@@ -38,6 +42,7 @@ public class Main {
             db = server.getDatabase(DB_NAME);
             System.out.println(">>> Opened existing database: " + DB_NAME);
         }
+        registerListeners(db);
 
         // 3. Keep the process alive so external tools / Gemini can query it
         System.out.println("\n========================================================");
@@ -54,48 +59,129 @@ public class Main {
         System.out.println(">>> Stopped.");
     }
 
+    private static void registerListeners(Database db) {
+        Schema schema = db.getSchema();
+        if (schema.existsType("Point")) {
+            VertexType pointType = schema.getOrCreateVertexType("Point");
+            pointType.getEvents().registerListener((BeforeRecordUpdateListener) record -> {
+                if (record instanceof Document doc && doc.has("currentValue")) {
+                    Object val = doc.get("currentValue");
+                    double num = val instanceof Number n ? n.doubleValue() : Double.parseDouble(String.valueOf(val));
+                    if (num < -50.0 || num > 100.0) {
+                        System.out.println(">>> [VETO] Point value out of range (-50 to 100): " + val);
+                        throw new IllegalArgumentException("Point value out of range (-50 to 100): " + val);
+                    }
+                    System.out.println(">>> [ACCEPTED] Updating Point value to: " + val);
+                    return true;
+                }
+                return true;
+            });
+            System.out.println(">>> Registered BeforeRecordUpdateListener on Point type.");
+        }
+    }
+
     private static void initializeSchemaAndData(Database db) {
         db.transaction(() -> {
             Schema schema = db.getSchema();
 
-            // Create Vertex Types
-            schema.getOrCreateVertexType("Equipment");
-            schema.getOrCreateVertexType("ConnectionPoint");
-            schema.getOrCreateVertexType("Point");
+            // Root Entity vertex type with unique name index
+            VertexType entity = schema.getOrCreateVertexType("Entity");
+            entity.getOrCreateProperty("name", PropertyType.STRING);
+            schema.getOrCreateTypeIndex(Schema.INDEX_TYPE.LSM_TREE, true, "Entity", "name");
 
-            // Create Edge Types
+            // Location hierarchy inheriting from Entity
+            VertexType location = (VertexType) schema.getOrCreateVertexType("Location").addSuperType(entity);
+
+            // Spatial subtypes inheriting from Location
+            schema.getOrCreateVertexType("Site").addSuperType(location);
+            schema.getOrCreateVertexType("Building").addSuperType(location);
+            schema.getOrCreateVertexType("Floor").addSuperType(location);
+            schema.getOrCreateVertexType("Space").addSuperType(location);
+
+            // Domain subtypes inheriting directly from Entity
+            schema.getOrCreateVertexType("Equipment").addSuperType(entity);
+            schema.getOrCreateVertexType("Point").addSuperType(entity);
+
+            // Standalone vertex type (does not inherit from Entity)
+            schema.getOrCreateVertexType("ConnectionPoint");
+
+            // Edge types
+            schema.getOrCreateEdgeType("HAS_PART");
+            schema.getOrCreateEdgeType("LOCATED_IN");
             schema.getOrCreateEdgeType("CONNECTS_TO");
             schema.getOrCreateEdgeType("HAS_CONNECTION_POINT");
             schema.getOrCreateEdgeType("HAS_POINT");
 
-            // Seed sample entities
-            MutableVertex ahu = db.newVertex("Equipment")
-                    .set("name", "AHU-01")
-                    .set("type", "Brick:Air_Handling_Unit")
+            // 1. Site
+            MutableVertex site = db.newVertex("Site")
+                    .set("name", "NOR")
+                    .set("displayName", "8 Normanby Road")
+                    .set("address", "8 Normanby Road, Mount Eden, Auckland 1024, New Zealand")
+                    .set("timezone", "Pacific/Auckland")
                     .save();
 
-            MutableVertex vav = db.newVertex("Equipment")
-                    .set("name", "VAV-101")
-                    .set("type", "Brick:Variable_Air_Volume_Box")
+            // 2. Building
+            MutableVertex building = db.newVertex("Building")
+                    .set("name", "NOR_B01")
+                    .set("displayName", "Main Building")
                     .save();
+            site.newEdge("HAS_PART", building).save();
 
-            MutableVertex supplyPort = db.newVertex("ConnectionPoint")
-                    .set("name", "AHU-01-SupplyAirPort")
-                    .set("direction", "Outlet")
+            // 3. Floors
+            MutableVertex flGnd = db.newVertex("Floor")
+                    .set("name", "NOR_B01_GND")
+                    .set("displayName", "Ground Floor")
                     .save();
+            building.newEdge("HAS_PART", flGnd).save();
 
-            MutableVertex ahuDat = db.newVertex("Point")
-                    .set("name", "AHU-01-DAT")
-                    .set("type", "Brick:Discharge_Air_Temperature_Sensor")
-                    .set("unit", "degC")
+            MutableVertex fl01 = db.newVertex("Floor")
+                    .set("name", "NOR_B01_L01")
+                    .set("displayName", "Level 1")
                     .save();
+            building.newEdge("HAS_PART", fl01).save();
 
-            // Establish topology edges
-            ahu.newEdge("HAS_CONNECTION_POINT", supplyPort).save();
-            supplyPort.newEdge("CONNECTS_TO", vav).save();
-            ahu.newEdge("HAS_POINT", ahuDat).save();
+            // 4. Spaces - Ground Floor
+            MutableVertex itRoom = db.newVertex("Space")
+                    .set("name", "NOR_B01_GND_IT")
+                    .set("displayName", "IT Room")
+                    .set("brickType", "Brick:Server_Room")
+                    .save();
+            flGnd.newEdge("HAS_PART", itRoom).save();
 
-            System.out.println(">>> Seed data created: AHU-01 -> Port -> VAV-101, AHU-01 -> Point (AHU-01-DAT)");
+            // 5. Spaces - Level 1
+            MutableVertex kitchen = db.newVertex("Space")
+                    .set("name", "NOR_B01_L01_KIT")
+                    .set("displayName", "Level 1 Kitchen")
+                    .set("brickType", "Brick:Kitchen")
+                    .save();
+            fl01.newEdge("HAS_PART", kitchen).save();
+
+            MutableVertex cupboard01 = db.newVertex("Space")
+                    .set("name", "NOR_B01_L01_KIT_S01")
+                    .set("displayName", "Storage Cupboard 01")
+                    .save();
+            kitchen.newEdge("HAS_PART", cupboard01).save();
+
+            MutableVertex meetingRoom = db.newVertex("Space")
+                    .set("name", "NOR_B01_L01_MTG")
+                    .set("displayName", "Meeting Room")
+                    .set("brickType", "Brick:Conference_Room")
+                    .save();
+            fl01.newEdge("HAS_PART", meetingRoom).save();
+
+            MutableVertex table = db.newVertex("Space")
+                    .set("name", "NOR_B01_L01_MTG_TBL")
+                    .set("displayName", "Meeting Room Table")
+                    .save();
+            meetingRoom.newEdge("HAS_PART", table).save();
+
+            MutableVertex nwWall = db.newVertex("Space")
+                    .set("name", "NOR_B01_L01_MTG_NWW")
+                    .set("displayName", "North West Wall")
+                    .save();
+            meetingRoom.newEdge("HAS_PART", nwWall).save();
+
+            System.out.println(">>> Seeded Normanby Road spatial hierarchy.");
         });
     }
 }

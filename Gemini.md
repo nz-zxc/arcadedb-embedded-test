@@ -31,14 +31,25 @@ A semantic Digital Twin application built on embedded ArcadeDB to model, visuali
   - `HAS_PORT_TEMPLATE`: EquipmentTemplate to PortTemplate blueprint.
   - `HAS_SLOT_TEMPLATE`: EquipmentTemplate to SlotTemplate blueprint.
   - `HAS_CONNECTION_POINT`: Concrete ports attached to Equipment or Cables.
-  - `CONNECTS_TO`: Internal port-to-port signal continuity and pass-through paths (e.g. Keystone `FRONT_RJ45 <-> REAR_IDC`, HDMI In -> HDMI Loop, Genlock In -> Genlock Loop).
+  - `CONNECTS_TO`: Internal port-to-port signal continuity and pass-through paths (e.g. Keystone `FRONT_RJ45 -> REAR_IDC`, HDMI In -> HDMI Loop, Genlock In -> Genlock Loop).
   - `MATES_WITH`: Physical mating between male cable ends and female jack/equipment connection points.
   - `HAS_POINT`: Equipment to telemetry `Point` vertex (e.g., `Brick:Signal_Status`).
   - `HAS_CONFIGURATION`: Equipment to ConfigurationBackup vertex.
+* **Canonical Edge Direction Rule (Anti-Loop & Path Uniqueness):**
+  - Physical junctions are modeled using **single canonical directed edges** and queried undirectionally (`-[:CONNECTS_TO|MATES_WITH]-`).
+  - **Rationale:** openCypher path-finding enforces relationship uniqueness, not vertex uniqueness. Anti-parallel edges ($A \rightarrow B$ and $B \rightarrow A$) cause exponential path duplication ($2^N$ duplicate paths for the same sequence) and allow ping-pong bounce loops ($A \rightarrow B \rightarrow A$) in variable-length queries.
+  - **Standard Canonical Orientations:**
+    - **Cables (`CONNECTS_TO`):** Always directed from `End A -> End B`.
+    - **Keystone Jacks (`CONNECTS_TO`):** Always directed from `FRONT_RJ45 -> REAR_IDC`.
+    - **Passive Loop-Outs (`CONNECTS_TO`):** Always directed from `IN -> LOOP`.
+    - **Interface Mating (`MATES_WITH`):** Always directed from `Cable End (Male) -> Device/Jack Port (Female)`.
 * **Cable & Interconnect Schema:**
   - `Cable` vertex inherits from `Entity` (`name`, `displayName`, `partNumber`, `mediaType`, `color`, `wiringStandard`, `lengthMeters`).
   - Connection Model: A `Cable` has two concrete `ConnectionPoint` ends (`_A` and `_B`, gender `MALE`) linked via `HAS_CONNECTION_POINT`.
+  - Internal Continuity: The two ends of a cable are connected via a single canonical `CONNECTS_TO` edge (`End A -> End B`), representing the conductive media.
   - Mating Model: Male cable ends connect to female device or jack ports via directed `MATES_WITH` edges (`Cable End -> Jack/Device Port`).
+  - Unified Signal Traversal: Alternating between `MATES_WITH` (inter-asset mating) and `CONNECTS_TO` (intra-asset continuity) enables end-to-end signal tracing across devices, patch panels, and cables in a single Cypher expression:
+    `MATCH path = (start:ConnectionPoint)-[:MATES_WITH|CONNECTS_TO*]-(end:ConnectionPoint) RETURN path`
 
 ## 3. Modular Equipment & UI Strategy
 * **Template vs. Instance:** Blueprints defined in `EquipmentTemplate`, `SlotTemplate`, and `PortTemplate`. Concrete hardware instantiated via `DeviceFactory` into `Equipment` and `ConnectionPoint`.
@@ -55,7 +66,8 @@ A semantic Digital Twin application built on embedded ArcadeDB to model, visuali
   - `novastar:h-16xrj45-2xfiber-out`: 16x RJ45 LED pixel outputs and 2x SFP+ optical ports.
   - `dynamix:ror47b`: Dynamix ROR47B 47RU Open Rack (543.0 x 2230.0 x 280.0 mm, static load 200 kg, ANSI/EIA RS310-D).
   - `dynamix:pp-ukstp-24rmb`: Dynamix 24-Port 1RU Keystone Patch Panel (482.6 x 44.45 x 150.0 mm) with 24 `KEYSTONE_APERTURE` slots (`01` through `24`).
-  - `dynamix:kj-cat6`: Dynamix Cat6 RJ45 Keystone Jack with bidirectional `FRONT_RJ45` <-> `REAR_IDC` internal signal continuity (`CONNECTS_TO`).
+  - `dynamix:kj-cat6`: Dynamix Cat6 RJ45 Keystone Jack with canonical `FRONT_RJ45 -> REAR_IDC` internal signal continuity (`CONNECTS_TO`).
+  - `jaycar:yn8054`: Jaycar Triple Keystone Wall Plate White (70.0 x 114.0 x 6.0 mm, standard flush mounting) with 3 `KEYSTONE_APERTURE` slots (`01`, `02`, `03`).
 * **Visual Rendering:** Coordinate system in millimeters (`xOffsetMm`, `yOffsetMm`) relative to panel faces (`FRONT`, `REAR`). Standard SVG symbols (`svg:hdmi-female`, `svg:rj45`, etc.) referenced for dynamic panel generation in web UIs.
 * **Telemetry & Timeseries:**
   - ArcadeDB native timeseries engine ingests dynamic operational states (e.g., video signal present, resolution) tied to static `Point` vertices.
@@ -78,9 +90,33 @@ A semantic Digital Twin application built on embedded ArcadeDB to model, visuali
         - Slot `09`: Keystone Jack `NOR_B01_GND_IT_R02_U11_PP_J09` ("PP U11 Jack 09 (From Meeting Room Table)")
       - Slot U14 (`uPosition=14, rackUnits=1`): Patch Panel `NOR_B01_GND_IT_R02_U14_PP`
         - Slot `06`: Keystone Jack `NOR_B01_GND_IT_R02_U14_PP_J06` ("PP U14 Jack 06 (To Kitchen Cupboard S01)")
+* **Field Wall Plates & Outlets:**
+  - `NOR_B01_L01_KIT_S01_WP01` (Jaycar YN8054 Triple Keystone Wall Plate):
+    - Physical Location: `NOR_B01_L01_KIT_S01` (`LOCATED_IN`)
+    - Installed Jacks:
+      - Slot `03`: Keystone Jack `NOR_B01_L01_KIT_S01_WP01_J03` ("Cupboard S01 Jack 03 (From Rack R02 U14:06)")
+        - `FRONT_RJ45`: Female RJ45 front port
+        - `REAR_IDC`: Female 110/Krone IDC punchdown
 * **Physical Cabling & Interconnects:**
   - `NOR_B01_GND_IT_R02_PL_U11J09_U14J06`:
     - Display Name: "Dynamix 0.5m Cat6 Yellow UTP Patch Lead (T568A)"
     - Part Number: `PLY-C6A-0.5`, Media: `CAT6_UTP_PATCH`, Color: `YELLOW`, Length: `0.5m`, Wiring: `T568A`
     - End A (`_A`): RJ45 Male `MATES_WITH` -> `NOR_B01_GND_IT_R02_U11_PP_J09_FRONT_RJ45` (U11 Jack 09 Front)
     - End B (`_B`): RJ45 Male `MATES_WITH` -> `NOR_B01_GND_IT_R02_U14_PP_J06_FRONT_RJ45` (U14 Jack 06 Front)
+  - `NOR_B01_CBL_R02_U14J06_KIT_S01_WP01J03`:
+    - Display Name: "Generic 25m Cat6 UTP Solid Horizontal Cable (Blue)"
+    - Part Number: `GEN-C6-UTP-SOLID`, Media: `CAT6_UTP_SOLID`, Color: `BLUE`, Length: `25.0m`, Wiring: `T568A`
+    - End A (`_A`): 110/Krone IDC Male `MATES_WITH` -> `NOR_B01_GND_IT_R02_U14_PP_J06_REAR_IDC` (U14 Jack 06 Rear)
+    - End B (`_B`): 110/Krone IDC Male `MATES_WITH` -> `NOR_B01_L01_KIT_S01_WP01_J03_REAR_IDC` (Cupboard S01 Jack 03 Rear)
+* **Verified End-to-End Signal Path Query:**
+  ```cypher
+  // Traces full physical continuity from U11 Jack 09 Rear IDC through Patch Lead and Horizontal Cable to Cupboard S01 Jack 03 Front RJ45
+  MATCH path = (start:ConnectionPoint {name: 'NOR_B01_GND_IT_R02_U11_PP_J09_REAR_IDC'})
+               -[:MATES_WITH|CONNECTS_TO*1..12]-
+               (dest:ConnectionPoint {name: 'NOR_B01_L01_KIT_S01_WP01_J03_FRONT_RJ45'})
+  RETURN [n in nodes(path) | n.name] AS portSequence,
+         [r in relationships(path) | type(r)] AS relationshipSequence
+  LIMIT 1
+  ```
+  - **Sequence (9 alternating hops):**
+    `U11_J09_REAR_IDC` $\xrightarrow{\text{CONNECTS\_TO}}$ `U11_J09_FRONT_RJ45` $\xrightarrow{\text{MATES\_WITH}}$ `PatchLead_A` $\xrightarrow{\text{CONNECTS\_TO}}$ `PatchLead_B` $\xrightarrow{\text{MATES\_WITH}}$ `U14_J06_FRONT_RJ45` $\xrightarrow{\text{CONNECTS\_TO}}$ `U14_J06_REAR_IDC` $\xrightarrow{\text{MATES\_WITH}}$ `HorizCbl_A` $\xrightarrow{\text{CONNECTS\_TO}}$ `HorizCbl_B` $\xrightarrow{\text{MATES\_WITH}}$ `WP01_J03_REAR_IDC` $\xrightarrow{\text{CONNECTS\_TO}}$ `WP01_J03_FRONT_RJ45`

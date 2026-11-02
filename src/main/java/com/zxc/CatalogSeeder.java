@@ -121,10 +121,28 @@ public class CatalogSeeder {
                     .save();
             MutableVertex frontPort = factory.addPort(keystoneJack, "FRONT_RJ45", "BIDIRECTIONAL", "RJ45", "FEMALE", "DATA_ETHERNET_OR_HDBASET", "FRONT", 10.0, 10.0);
             MutableVertex rearPort = factory.addPort(keystoneJack, "REAR_IDC", "BIDIRECTIONAL", "IDC_110_KRONE", "FEMALE", "DATA_RAW_TWISTED_PAIR", "REAR", 10.0, 10.0);
+            // Canonical direction: Front RJ45 -> Rear IDC
             frontPort.newEdge("CONNECTS_TO", rearPort).save();
-            rearPort.newEdge("CONNECTS_TO", frontPort).save();
 
-            System.out.println(">>> CatalogSeeder: Seeded blueprints for novastar:h2, cards, dynamix:ror47b, dynamix:pp-ukstp-24rmb, and dynamix:kj-cat6.");
+            // 8. Jaycar YN8054 Triple Keystone Wall Plate White
+            MutableVertex wallPlate = factory.registerTemplate(
+                    "jaycar:yn8054",
+                    "Wall_Plate",
+                    "Jaycar Triple Keystone Wall Plate White"
+            );
+            wallPlate.set("manufacturer", "Jaycar")
+                    .set("model", "YN8054")
+                    .set("deviceType", "Wall_Plate")
+                    .set("widthMm", 70.0)
+                    .set("heightMm", 114.0)
+                    .set("depthMm", 6.0)
+                    .set("gangCount", 3)
+                    .save();
+            factory.addSlot(wallPlate, "01", "KEYSTONE_APERTURE", 1, 35.0, 30.0);
+            factory.addSlot(wallPlate, "02", "KEYSTONE_APERTURE", 2, 35.0, 57.0);
+            factory.addSlot(wallPlate, "03", "KEYSTONE_APERTURE", 3, 35.0, 84.0);
+
+            System.out.println(">>> CatalogSeeder: Seeded blueprints for novastar:h2, cards, dynamix:ror47b, dynamix:pp-ukstp-24rmb, dynamix:kj-cat6, and jaycar:yn8054.");
         });
     }
 }

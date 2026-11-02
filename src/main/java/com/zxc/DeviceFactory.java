@@ -269,7 +269,10 @@ public class DeviceFactory {
         cable.newEdge("HAS_CONNECTION_POINT", endA).save();
         cable.newEdge("HAS_CONNECTION_POINT", endB).save();
 
-        // 5. Query and mate End A -> portToMateA using parameterized query
+        // 5. Establish canonical internal conductive signal path: End A -> End B
+        endA.newEdge("CONNECTS_TO", endB).save();
+
+        // 6. Query and mate End A -> portToMateA using parameterized query
         if (portToMateA != null) {
             ResultSet rsA = db.query("cypher", "MATCH (cp:ConnectionPoint {name: $name}) RETURN cp", Map.of("name", portToMateA));
             if (rsA.hasNext()) {

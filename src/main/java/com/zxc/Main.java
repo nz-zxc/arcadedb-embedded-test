@@ -64,7 +64,7 @@ public class Main {
         SchemaManager.createSchema(db);
 
         // 2. Seed catalog blueprints if not already present
-        ResultSet rsCat = db.query("cypher", "MATCH (t:EquipmentTemplate {name: 'dynamix:ror47b'}) RETURN t");
+        ResultSet rsCat = db.query("cypher", "MATCH (t:EquipmentTemplate {name: 'jaycar:yn8054'}) RETURN t");
         if (!rsCat.hasNext()) {
             CatalogSeeder.seedCatalog(db);
         }
@@ -90,8 +90,104 @@ public class Main {
         // 5. Deploy Rack R02 if not present
         deployRackR02(db);
 
-        // 6. Run audit of the deployed infrastructure
+        // 6. Deploy Cupboard S01 Wall Plate
+        deployCupboardWallPlate(db);
+
+        // 7. Deploy Horizontal Building Cables
+        deployHorizontalCables(db);
+
+        // 8. Enforce single canonical directed edges (prevent duplicate paths in openCypher)
+        enforceCanonicalEdges(db);
+
+        // 9. Run audit of the deployed infrastructure
         runAudit(db);
+    }
+
+    private static void enforceCanonicalEdges(Database db) {
+        db.transaction(() -> {
+            // 1. Remove reverse anti-parallel cable edges (B -> A)
+            db.command("cypher",
+                    "MATCH (b:ConnectionPoint {portName: 'B'})-[r:CONNECTS_TO]->(a:ConnectionPoint {portName: 'A'}) " +
+                    "DELETE r");
+
+            // 2. Remove reverse anti-parallel keystone jack edges (Rear IDC -> Front RJ45)
+            db.command("cypher",
+                    "MATCH (rear:ConnectionPoint)-[r:CONNECTS_TO]->(front:ConnectionPoint) " +
+                    "WHERE rear.name ENDS WITH '_REAR_IDC' AND front.name ENDS WITH '_FRONT_RJ45' " +
+                    "DELETE r");
+
+            // 3. Remove reverse anti-parallel template edges
+            db.command("cypher",
+                    "MATCH (rear:PortTemplate {name: 'REAR_IDC'})-[r:CONNECTS_TO]->(front:PortTemplate {name: 'FRONT_RJ45'}) " +
+                    "DELETE r");
+        });
+    }
+
+    private static void deployHorizontalCables(Database db) {
+        ResultSet rsCable = db.query("cypher",
+                "MATCH (c:Cable {name: 'NOR_B01_CBL_R02_U14J06_KIT_S01_WP01J03'}) RETURN c");
+        if (!rsCable.hasNext()) {
+            db.transaction(() -> {
+                DeviceFactory.createCable(
+                        db,
+                        "NOR_B01_CBL_R02_U14J06_KIT_S01_WP01J03",
+                        "Generic 25m Cat6 UTP Solid Horizontal Cable (Blue)",
+                        "GEN-C6-UTP-SOLID",
+                        "CAT6_UTP_SOLID",
+                        "BLUE",
+                        "T568A",
+                        25.0,
+                        "IDC_110_KRONE",
+                        "NOR_B01_GND_IT_R02_U14_PP_J06_REAR_IDC",
+                        "IDC_110_KRONE",
+                        "NOR_B01_L01_KIT_S01_WP01_J03_REAR_IDC"
+                );
+                System.out.println(">>> Main: Successfully deployed horizontal cable from Rack R02 U14:06 to Cupboard S01 WP01:03.");
+            });
+        }
+    }
+
+    private static void deployCupboardWallPlate(Database db) {
+        ResultSet rsJ03 = db.query("cypher", "MATCH (e:Equipment {name: 'NOR_B01_L01_KIT_S01_WP01_J03'}) RETURN e");
+        if (!rsJ03.hasNext()) {
+            db.transaction(() -> {
+                // Remove legacy J01 if previously instantiated
+                db.command("cypher", "MATCH (j:Equipment {name: 'NOR_B01_L01_KIT_S01_WP01_J01'}) DETACH DELETE j");
+                db.command("cypher", "MATCH (cp:ConnectionPoint) WHERE cp.name STARTS WITH 'NOR_B01_L01_KIT_S01_WP01_J01_' DETACH DELETE cp");
+
+                DeviceFactory factory = new DeviceFactory(db);
+
+                // 1. Locate Cupboard S01 Space
+                ResultSet rsSpace = db.query("cypher", "MATCH (s:Space {name: 'NOR_B01_L01_KIT_S01'}) RETURN s");
+                Vertex cupboard01 = rsSpace.hasNext() ? rsSpace.next().getVertex().orElse(null) : null;
+
+                // 2. Instantiate or retrieve Jaycar YN8054 Triple Keystone Wall Plate in Cupboard S01
+                ResultSet rsWp = db.query("cypher", "MATCH (e:Equipment {name: 'NOR_B01_L01_KIT_S01_WP01'}) RETURN e");
+                MutableVertex wp;
+                if (rsWp.hasNext()) {
+                    wp = rsWp.next().getVertex().get().modify();
+                } else {
+                    wp = factory.instantiateEquipment(
+                            "jaycar:yn8054",
+                            "NOR_B01_L01_KIT_S01_WP01",
+                            "Cupboard S01 Triple Keystone Wall Plate",
+                            cupboard01,
+                            null
+                    );
+                }
+
+                // 3. Insert Cat6 Keystone Jack into slot "03"
+                factory.instantiateEquipment(
+                        "dynamix:kj-cat6",
+                        "NOR_B01_L01_KIT_S01_WP01_J03",
+                        "Cupboard S01 Jack 03 (From Rack R02 U14:06)",
+                        wp,
+                        "03"
+                );
+
+                System.out.println(">>> Main: Successfully deployed Wall Plate WP01 with Jack 03 in Cupboard S01.");
+            });
+        }
     }
 
     private static void deployRackR02(Database db) {
@@ -191,6 +287,15 @@ public class Main {
                             "NOR_B01_GND_IT_R02_U14_PP_J06_FRONT_RJ45"
                     );
                 });
+            } else {
+                // Ensure canonical internal continuity CONNECTS_TO edge exists between cable End A and End B
+                db.transaction(() -> {
+                    db.command("cypher",
+                            "MATCH (a:ConnectionPoint {name: 'NOR_B01_GND_IT_R02_PL_U11J09_U14J06_A'}), " +
+                            "      (b:ConnectionPoint {name: 'NOR_B01_GND_IT_R02_PL_U11J09_U14J06_B'}) " +
+                            "WHERE NOT (a)-[:CONNECTS_TO]->(b) " +
+                            "CREATE (a)-[:CONNECTS_TO]->(b)");
+                });
             }
         }
     }
@@ -199,7 +304,8 @@ public class Main {
         db.transaction(() -> {
             DeviceFactory factory = new DeviceFactory(db);
 
-            // 1. Locate Cupboard S01 Space
+            // 1. Locate
+            // Cupboard S01 Space
             ResultSet rsSpace = db.query("cypher", "MATCH (s:Space {name: 'NOR_B01_L01_KIT_S01'}) RETURN s");
             Vertex cupboard01 = rsSpace.hasNext() ? rsSpace.next().getVertex().orElse(null) : null;
 
@@ -319,7 +425,25 @@ public class Main {
                     r.getProperty("portName"), r.getProperty("connType"), r.getProperty("face"));
         }
 
-        // 5. Physical Cabling & Interconnects Audit
+        // 5. Field Wall Plates & Outlets Audit
+        ResultSet rsPlates = db.query("cypher",
+                "MATCH (wp:Equipment)-[hp:HAS_PART]->(jack:Equipment) " +
+                "WHERE wp.model = 'jaycar:yn8054' " +
+                "OPTIONAL MATCH (wp)-[:LOCATED_IN]->(space:Space) " +
+                "OPTIONAL MATCH (jack)-[:HAS_CONNECTION_POINT]->(cp:ConnectionPoint) " +
+                "RETURN wp.name AS plate, space.name AS space, hp.slot AS slot, jack.name AS jackName, " +
+                "       jack.displayName AS jackDesc, cp.name AS portName, cp.panelFace AS face " +
+                "ORDER BY slot, face");
+        System.out.println("\n--- Field Wall Plates & Outlets ---");
+        while (rsPlates.hasNext()) {
+            Result r = rsPlates.next();
+            System.out.printf("  Plate: %s (located in %s) | Slot [%s] -> Jack: %s (\"%s\") | Port: %s (%s)%n",
+                    r.getProperty("plate"), r.getProperty("space"),
+                    r.getProperty("slot"), r.getProperty("jackName"), r.getProperty("jackDesc"),
+                    r.getProperty("portName"), r.getProperty("face"));
+        }
+
+        // 6. Physical Cabling & Interconnects Audit
         ResultSet rsCables = db.query("cypher",
                 "MATCH (c:Cable) " +
                 "RETURN c.name AS name, c.displayName AS desc, c.partNumber AS partNum, " +

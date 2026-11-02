@@ -2,6 +2,7 @@ package com.zxc;
 
 import com.arcadedb.database.Database;
 import com.arcadedb.graph.MutableVertex;
+import com.arcadedb.query.sql.executor.ResultSet;
 
 public class LocationSeeder {
 
@@ -42,6 +43,13 @@ public class LocationSeeder {
                     .set("brickType", "Brick:Server_Room")
                     .save();
             flGnd.newEdge("HAS_PART", itRoom).save();
+
+            // Deploy Rack R02 in IT Room
+            ResultSet rsRackTpl = db.query("cypher", "MATCH (t:EquipmentTemplate {name: 'dynamix:ror47b'}) RETURN t");
+            if (rsRackTpl.hasNext()) {
+                DeviceFactory factory = new DeviceFactory(db);
+                factory.instantiateEquipment("dynamix:ror47b", "NOR_B01_GND_IT_R02", "IT Room Rack R02", itRoom, null);
+            }
 
             // 5. Spaces - Level 1
             MutableVertex kitchen = db.newVertex("Space")

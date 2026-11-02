@@ -35,7 +35,9 @@ public class SchemaManager {
             // 4. Component & template vertex types (standalone)
             schema.getOrCreateVertexType("PortTemplate");
             schema.getOrCreateVertexType("SlotTemplate");
-            schema.getOrCreateVertexType("ConnectionPoint");
+            VertexType cpType = schema.getOrCreateVertexType("ConnectionPoint");
+            cpType.getOrCreateProperty("name", PropertyType.STRING);
+            schema.getOrCreateTypeIndex(Schema.INDEX_TYPE.LSM_TREE, true, "ConnectionPoint", "name");
 
             // 5. Edge types
             schema.getOrCreateEdgeType("HAS_PART");
